@@ -1,0 +1,37 @@
+name: Download RDOJO IA PDFs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          repository: PirateIB/rdojo
+          # Gitea, not GitHub — use direct clone via git
+      - name: Clone rdojo via Gitea with LFS
+        run: |
+          git clone --depth 1 https://git.pirateib.sh/pirateIB/rdojo.git /tmp/rdojo
+          cd /tmp/rdojo
+          git lfs fetch 2>&1 | head -20
+          find public -name "*.pdf" | head
+          echo "JSON count: $(ls public/exemplars/*.json | wc -l)"
+          # Try to extract fileUrl hosts
+          grep -o 'grader-public[^"]*' public/exemplars/*.json | sort -u | head -5
+      - name: Zip
+        run: |
+          mkdir -p /tmp/pdfs
+          # Fallback: zip marxify PDFs already cached + any LFS PDFs found
+          cp -r /tmp/marxify_all/*.pdf /tmp/pdfs/ 2>/dev/null || true
+          find /tmp/rdojo -name "*.pdf" -exec cp {} /tmp/pdfs/ \; 2>/dev/null || true
+          cd /tmp/pdfs && zip -q -9 ../ia-pdfs.zip . 2>/dev/null || echo "zip empty"
+          ls -lh ../ia-pdfs.zip 2>/dev/null || echo "no zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ia-pdfs
+          path: /tmp/ia-pdfs.zip
+          retention-days: 7
