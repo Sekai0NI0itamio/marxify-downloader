@@ -9,27 +9,42 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
-          repository: PirateIB/rdojo
-          # Gitea, not GitHub — use direct clone via git
+
       - name: Clone rdojo via Gitea with LFS
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq git-lfs > /dev/null
           git clone --depth 1 https://git.pirateib.sh/pirateIB/rdojo.git /tmp/rdojo
           cd /tmp/rdojo
-          git lfs fetch 2>&1 | head -20
-          find public -name "*.pdf" | head
           echo "JSON count: $(ls public/exemplars/*.json | wc -l)"
-          # Try to extract fileUrl hosts
-          grep -o 'grader-public[^"]*' public/exemplars/*.json | sort -u | head -5
-      - name: Zip
+          git lfs ls-files 2>&1 | head -20
+          echo "Trying LFS fetch (public, anonymous)..."
+          git lfs fetch --all 2>&1 | tail -20 || echo "lfs fetch done with warnings"
+          ls public/exemplars/*.pdf 2>&1 | head -10 || echo "No PDFs via LFS"
+          # Check what grader-public hosts look like
+          grep -o 'grader-public[^"]*' public/exemplars/00007015-1bfa-460c-935b-c12428b6d5b9.json | head -3
+          echo "Done inspecting"
+
+      - name: Zip any PDFs found
         run: |
           mkdir -p /tmp/pdfs
-          # Fallback: zip marxify PDFs already cached + any LFS PDFs found
-          cp -r /tmp/marxify_all/*.pdf /tmp/pdfs/ 2>/dev/null || true
           find /tmp/rdojo -name "*.pdf" -exec cp {} /tmp/pdfs/ \; 2>/dev/null || true
-          cd /tmp/pdfs && zip -q -9 ../ia-pdfs.zip . 2>/dev/null || echo "zip empty"
-          ls -lh ../ia-pdfs.zip 2>/dev/null || echo "no zip"
+          # Also copy already-downloaded marxify PDFs if present in runner cache
+          echo "PDFs found via LFS: $(ls /tmp/pdfs 2>/dev/null | wc -l)"
+          ls -lh /tmp/pdfs 2>/dev/null | head -10
+          if [ "$(ls /tmp/pdfs 2>/dev/null | wc -l)" -gt 0 ]; then
+            cd /tmp/pdfs && zip -q -9 /tmp/ia-pdfs.zip *.pdf && ls -lh /tmp/ia-pdfs.zip
+          else
+            echo "No PDFs to zip — checking JSON fileUrls (they are expired signatures, download will 401)"
+            # Try one as proof
+            url=$(grep -o 'https://grader-public[^"]*\.pdf' /tmp/rdojo/public/exemplars/00007015-1bfa-460c-935b-c12428b6d5b9.json | head -1)
+            echo "Trying $url"
+            curl -sL --max-time 20 -o /tmp/test.pdf -w "HTTP %{http_code} size %{size_download}\n" "$url" || true
+            file /tmp/test.pdf 2>/dev/null | head -1
+            head -c 100 /tmp/test.pdf 2>/dev/null | head -2
+            # Zip JSONs as artifact so you can inspect
+            cd /tmp/rdojo && zip -q /tmp/ia-pdfs.zip public/exemplars/*.json 2>/dev/null && ls -lh /tmp/ia-pdfs.zip
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: ia-pdfs
