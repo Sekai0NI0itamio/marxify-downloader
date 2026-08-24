@@ -1,0 +1,50 @@
+name: Download Marxify PDFs
+
+on:
+  workflow_dispatch:
+    inputs:
+      concurrency:
+        description: 'Parallel downloads'
+        default: '20'
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all PDFs concurrently
+        run: |
+          mkdir -p pdfs
+          cat pdf_keys.txt | xargs -P "${{ github.event.inputs.concurrency || 20 }}" -I {} bash -c '
+            key="{}"
+            for attempt in 1 2 3 4 5; do
+              code=$(curl -sL --max-time 300 -o "pdfs/$key" -w "%{http_code}" "https://marxify.pages.dev/$key" || echo fail)
+              size=$(stat -c%s "pdfs/$key" 2>/dev/null || echo 0)
+              if [ "$code" = "200" ] && [ "$size" -gt 10000 ] && head -c4 "pdfs/$key" | grep -q "%PDF"; then
+                echo "OK $key ($size bytes)"
+                exit 0
+              fi
+              echo "retry $attempt $key (code=$code size=$size)"
+              sleep $((attempt * 3))
+            done
+            echo "FAILED $key"
+            rm -f "pdfs/$key"
+          '
+          echo "=== Downloaded: $(ls pdfs | wc -l) / $(wc -l < pdf_keys.txt) ==="
+
+      - name: Zip
+        run: |
+          cd pdfs
+          zip -q -9 ../marxify-pdfs.zip *.pdf
+          cd ..
+          ls -lh marxify-pdfs.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: marxify-pdfs
+          path: marxify-pdfs.zip
+          compression-level: 0
+          retention-days: 7
